@@ -141,11 +141,10 @@ public final class ClientContractTest {
             }
             assertEquals(1, postCalls.get());
 
-            JobResult idempotentJob = client.submitJob(new SubmitJobRequest()
-                    .code("print(1)")
-                    .idempotencyKey("request-1"));
-            assertEquals("job-2", idempotentJob.jobId);
-            assertEquals(2, idempotentPostCalls.get());
+            org.junit.jupiter.api.Assertions.assertThrows(ApiException.class,
+                    () -> client.submitJob(new SubmitJobRequest()
+                        .code("print(1)").idempotencyKey("request-1")));
+            assertEquals(1, idempotentPostCalls.get());
 
             JobResult job = client.getJob("job-1");
             assertEquals("succeeded", job.status);

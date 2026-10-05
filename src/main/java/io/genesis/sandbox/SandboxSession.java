@@ -74,6 +74,11 @@ public final class SandboxSession implements AutoCloseable {
         return new SandboxSession(client, session, options);
     }
 
+    /** 只查询原会话，调用方核对结果后决定后续动作，不调用create。 */
+    public Session lookupSession(String idempotencyKey) throws Exception {
+        return client.lookupSession(idempotencyKey);
+    }
+
     public static SandboxSession open(Client client, String profile, int ttlSeconds)
             throws Exception {
         return open(client, SessionOptions.builder().profile(profile).ttlSeconds(ttlSeconds).build());
@@ -204,9 +209,19 @@ public final class SandboxSession implements AutoCloseable {
         return client.mkdirSessionDir(sessionId, workspacePath);
     }
 
+    public WorkspaceFileInfo setExecutable(String workspacePath, boolean executable,
+                                           String ifMatch, Boolean expectedExecutable) throws Exception {
+        ensureOpen();
+        return client.setSessionFileExecutable(sessionId, workspacePath, executable, ifMatch, expectedExecutable);
+    }
+
     public void remove(String workspacePath, boolean recursive) throws Exception {
         ensureOpen();
         client.removeSessionFile(sessionId, workspacePath, recursive);
+    }
+
+    public void remove(String workspacePath, boolean recursive, String ifMatch) throws Exception {
+        ensureOpen(); client.removeSessionFile(sessionId, workspacePath, recursive, ifMatch);
     }
 
     /** Releases the runtime while retaining the logical Session and Workspace. */
@@ -364,8 +379,11 @@ public final class SandboxSession implements AutoCloseable {
             session = client.renewSession(
                     sessionId, extendSeconds, Duration.ofSeconds(10));
         } catch (InterruptedException error) {
+            stopHeartbeat();
             Thread.currentThread().interrupt();
         } catch (Exception error) {
+            // 未知续期结果必须先核对，不让后续定时tick继续叠加TTL。
+            stopHeartbeat();
             LOG.log(Level.WARNING, "session heartbeat failed for " + sessionId, error);
         }
     }

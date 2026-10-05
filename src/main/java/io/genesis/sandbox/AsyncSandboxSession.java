@@ -208,8 +208,24 @@ public final class AsyncSandboxSession {
         return supply(ioExecutor, () -> client.mkdirSessionDir(sessionId, path));
     }
 
+    public CompletableFuture<Session> lookupSession(String idempotencyKey) {
+        return supply(ioExecutor, () -> client.lookupSession(idempotencyKey));
+    }
+
+    public CompletableFuture<WorkspaceFileInfo> setExecutable(String path, boolean executable,
+                                                               String ifMatch, Boolean expectedExecutable) {
+        return supply(ioExecutor, () -> {
+            ensureOpen();
+            return client.setSessionFileExecutable(sessionId, path, executable, ifMatch, expectedExecutable);
+        });
+    }
+
     public CompletableFuture<Void> remove(String path, boolean recursive) {
         return run(ioExecutor, () -> client.removeSessionFile(sessionId, path, recursive));
+    }
+
+    public CompletableFuture<Void> remove(String path, boolean recursive, String ifMatch) {
+        return run(ioExecutor, () -> { ensureOpen(); client.removeSessionFile(sessionId, path, recursive, ifMatch); });
     }
 
     public CompletableFuture<Session> suspend() {
@@ -370,8 +386,13 @@ public final class AsyncSandboxSession {
         try {
             session = client.renewSession(sessionId, extendSeconds, Duration.ofSeconds(10));
         } catch (InterruptedException error) {
+            if (renewTask != null) renewTask.cancel(false);
+            if (scheduler != null) scheduler.shutdown();
             Thread.currentThread().interrupt();
         } catch (Exception error) {
+            // 未知续期结果必须先核对，不让后续定时tick继续叠加TTL。
+            if (renewTask != null) renewTask.cancel(false);
+            if (scheduler != null) scheduler.shutdown();
             LOG.log(Level.WARNING, "async session heartbeat failed for " + sessionId, error);
         }
     }

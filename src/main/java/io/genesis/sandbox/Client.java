@@ -222,11 +222,136 @@ public final class Client {
 
     public Workspace createWorkspace(CreateWorkspaceRequest request)
             throws IOException, InterruptedException {
+        require(request, "request").validate();
         return sendJson("POST", "/v1/workspaces", require(request, "request"), Workspace.class);
+    }
+
+    public WorkspaceModels.SharedStorageResource inspectSharedStorageResource(String storageRef, String resourceId)
+            throws IOException, InterruptedException {
+        WorkspaceModels.opaque(storageRef); WorkspaceModels.opaque(resourceId);
+        byte[] body = sendBytes("GET", "/v1/storage-resources/" + segment(storageRef) + "/" + segment(resourceId),
+                null, null, null, true, requestTimeout, maxAttempts);
+        WorkspaceModels.SharedStorageResource result = JsonCodec.readStrict(body, WorkspaceModels.SharedStorageResource.class);
+        if (result == null) throw new IOException("shared storage response is null");
+        try { result.validate(storageRef, resourceId); }
+        catch (IllegalArgumentException error) { throw new IOException("invalid shared storage response", error); }
+        return result;
+    }
+
+    public WorkspaceModels.WorkspaceViewFacts getWorkspaceView(String sessionId) throws IOException, InterruptedException {
+        return workspaceView("GET", sessionId, "");
+    }
+
+    public WorkspacePreparation.Receipt prepareWorkspaceView(String sessionId, WorkspacePreparation.Request request)
+            throws IOException, InterruptedException {
+        require(request, "request").validate();
+        byte[] body = sendBytes("POST", "/v1/sessions/" + segment(sessionId) + "/workspace-view?action=prepare",
+            JsonCodec.write(request), "application/json", null, false, requestTimeout, 1);
+        return WorkspacePreparation.decode(body, sessionId, request);
+    }
+
+    public WorkspacePreparation.Receipt lookupWorkspacePreparation(String sessionId, WorkspacePreparation.Request request)
+            throws IOException, InterruptedException {
+        require(request, "request").validate();
+        byte[] body;
+        try {
+            body = sendBytes("GET", "/v1/sessions/" + segment(sessionId) + "/workspace-view/preparations/"
+                + segment(request.operationId) + "?request_digest=" + queryValue(request.requestDigest),
+                null, null, null, true, requestTimeout, 1);
+        } catch (ApiException error) {
+            if (error.statusCode() == 404) return null;
+            throw error;
+        }
+        return WorkspacePreparation.decode(body, sessionId, request);
+    }
+
+    public WorkspaceModels.WorkspaceViewFacts sealWorkspaceView(String sessionId) throws IOException, InterruptedException {
+        return workspaceView("POST", sessionId, "?action=seal");
+    }
+
+    private WorkspaceModels.WorkspaceViewFacts workspaceView(String method, String sessionId, String query)
+            throws IOException, InterruptedException {
+        byte[] body = sendBytes(method, "/v1/sessions/" + segment(sessionId) + "/workspace-view" + query,
+                null, null, null, "GET".equals(method), requestTimeout, "GET".equals(method) ? maxAttempts : 1);
+        WorkspaceModels.WorkspaceViewFacts facts = JsonCodec.readStrict(body, WorkspaceModels.WorkspaceViewFacts.class);
+        if (facts == null || !sessionId.equals(facts.sessionId) || blank(facts.workspaceId)
+                || blank(facts.os) || blank(facts.arch) || blank(facts.viewState))
+            throw new IOException("workspace view response missing bound identity or required facts");
+        return facts;
+    }
+
+    public Session getSessionHistory(String sessionId) throws IOException, InterruptedException {
+        byte[] body = sendBytes("GET", "/v1/sessions/" + segment(sessionId) + "/history",
+                null, null, null, true, requestTimeout, maxAttempts);
+        Session result = JsonCodec.readStrict(body, Session.class);
+        if (result == null || !sessionId.equals(result.sessionId) || blank(result.status))
+            throw new IOException("session history response identity mismatch");
+        return result;
+    }
+
+    public WorkspacePurge.Receipt purgeSessionWorkspace(String sessionId, WorkspacePreparation.Request request) throws IOException, InterruptedException {
+        request.validate();
+        byte[] body = sendBytes("POST", "/v1/sessions/" + segment(sessionId) + "/workspace:purge",
+                JsonCodec.write(request), "application/json", null, false, requestTimeout, 1);
+        return WorkspacePurge.decode(body, sessionId, request);
+    }
+
+    public WorkspacePurge.Ownership getSessionOwnership(String sessionId) throws IOException, InterruptedException {
+        return WorkspacePurge.ownership(sendBytes("GET","/v1/sessions/"+segment(sessionId)+"/ownership",
+                null,"application/json",null,false,requestTimeout,1),sessionId);
+    }
+
+    public WorkspacePurge.Receipt lookupWorkspacePurge(String sessionId, WorkspacePreparation.Request request) throws IOException, InterruptedException {
+        request.validate();
+        try {
+            byte[] body = sendBytes("GET", "/v1/sessions/" + segment(sessionId) + "/workspace/purges/"
+                    + segment(request.operationId) + "?request_digest=" + request.requestDigest,
+                    null, "application/json", null, false, requestTimeout, 1);
+            return WorkspacePurge.decode(body, sessionId, request);
+        } catch (ApiException error) {
+            if (error.statusCode() == 404) return null;
+            throw error;
+        }
     }
 
     public Workspace getWorkspace(String workspaceId) throws IOException, InterruptedException {
         return sendJson("GET", "/v1/workspaces/" + segment(workspaceId), null, Workspace.class);
+    }
+
+    public WorkspacePurge.Receipt lookupStoragePurge(String workspaceId, WorkspacePreparation.Request request) throws IOException, InterruptedException {
+        request.validate();
+        try {
+            byte[] body = sendBytes("GET", "/v1/workspaces/"+segment(workspaceId)+"/purges/"+segment(request.operationId)
+                    +"?request_digest="+request.requestDigest,null,"application/json",null,false,requestTimeout,1);
+            var receipt = WorkspacePurge.decode(body,null,request);
+            if (!workspaceId.equals(receipt.workspaceId)) throw new IOException("Original storage purge workspace mismatch");
+            return receipt;
+        } catch (ApiException error) {
+            if (error.statusCode() == 404) return null;
+            throw error;
+        }
+    }
+    public WorkspaceLifecycle.Receipt controlWorkspaceLifecycle(String workspaceId, WorkspaceLifecycle.Request request) throws IOException, InterruptedException {
+        String digest = WorkspaceLifecycle.requestDigest(request);
+        byte[] body = sendBytes("POST", "/v1/workspaces/" + segment(workspaceId) + "/lifecycle",
+                JsonCodec.write(request), "application/json", null, false, requestTimeout, 1);
+        var receipt = JsonCodec.readStrict(body, WorkspaceLifecycle.Receipt.class);
+        if (receipt == null) throw new IOException("Missing lifecycle receipt");
+        receipt.validate(workspaceId, request.operationId());
+        if (!digest.equals(receipt.requestDigest()) || receipt.revision() != request.expectedRevision() + 1 || !request.state().equals(receipt.state())) throw new IOException("Lifecycle receipt differs from original intent");
+        if ("terminal".equals(request.state()) && (!request.terminalAt().equals(receipt.terminalAt)
+                || !request.terminalAt().plusSeconds(request.retentionSeconds()).equals(receipt.deadline)))
+            throw new IOException("Lifecycle receipt differs from parent terminal time or retention");
+        return receipt;
+    }
+    public WorkspaceLifecycle.Lookup lookupWorkspaceLifecycle(String workspaceId, String operationId) throws IOException, InterruptedException {
+        WorkspaceLifecycle.identity(operationId);
+        byte[] body = sendBytes("GET", "/v1/workspaces/" + segment(workspaceId) + "/lifecycle:lookup?operation_id=" + segment(operationId),
+                null, null, null, true, requestTimeout, maxAttempts);
+        var lookup = JsonCodec.readStrict(body, WorkspaceLifecycle.Lookup.class);
+        if (lookup == null) throw new IOException("Missing lifecycle lookup");
+        lookup.validate(workspaceId, operationId);
+        return lookup;
     }
 
     public void deleteWorkspace(String workspaceId) throws IOException, InterruptedException {
@@ -235,6 +360,29 @@ public final class Client {
 
     public Session createSession(CreateSessionRequest request) throws IOException, InterruptedException {
         return sendJson("POST", "/v1/sessions", require(request, "request"), Session.class);
+    }
+
+    /** 404 仅表示未找到，不证明从未创建；此方法绝不自动重建会话。 */
+    public Session lookupSession(String idempotencyKey) throws IOException, InterruptedException {
+        String key = requireText(idempotencyKey, "idempotencyKey");
+        if (key.length() > 256 || key.chars().anyMatch(value -> value < 32 || value == 127))
+            throw new IllegalArgumentException("idempotency key must be a bounded stable identity");
+        byte[] body;
+        try {
+            body = sendBytes("GET", "/v1/sessions:lookup?idempotency_key=" + queryValue(key),
+                null, null, null, true, requestTimeout, maxAttempts);
+        } catch (ApiException error) {
+            if (error.statusCode() == 404) return null;
+            throw error;
+        }
+        Session result = JsonCodec.readStrict(body, Session.class);
+        if (result == null || !key.equals(result.idempotencyKey) || blank(result.sessionId)
+                || blank(result.workspaceId) || blank(result.tenantId) || blank(result.runtimeProfile)
+                || blank(result.statePolicy) || blank(result.status) || result.createdAt == null
+                || result.expiresAt == null || result.resourceVersion < 1
+                || result.resourceVersion > WorkspaceModels.MAX_SAFE_INTEGER)
+            throw new IOException("session lookup response does not prove original identity");
+        return result;
     }
 
     public Session getSession(String sessionId) throws IOException, InterruptedException {
@@ -250,10 +398,10 @@ public final class Client {
                 Collections.emptyMap(), Session.class);
     }
 
-    /** Restores or validates the session runtime; repeated calls reuse an active runtime. */
+    /** 恢复或核验运行态；结果未知时不自动再次恢复。 */
     public Session resumeSession(String sessionId) throws IOException, InterruptedException {
         byte[] response = sendBytes("POST", "/v1/sessions/" + segment(sessionId) + ":resume",
-                null, "application/json", null, true, requestTimeout, maxAttempts);
+                null, "application/json", null, false, requestTimeout, 1);
         return JsonCodec.read(response, Session.class);
     }
 
@@ -290,6 +438,14 @@ public final class Client {
                 request, ExecRecord.class);
     }
 
+    public ExecutionGovernance.Proof queryWorkspaceMaintenanceProof(String workspaceId, ExecutionGovernance.Query query)
+            throws IOException, InterruptedException {
+        require(query,"query").validate(workspaceId);
+        byte[] body = sendBytes("POST", "/v1/workspaces/" + segment(workspaceId) + "/maintenance-proof:query",
+                JsonCodec.write(query), "application/json", Collections.emptyMap(), false, requestTimeout, 1);
+        return ExecutionGovernance.decode(body,query);
+    }
+
     public ExecRecord getExec(String sessionId, String execId)
             throws IOException, InterruptedException {
         return sendJson("GET", "/v1/sessions/" + segment(sessionId)
@@ -301,23 +457,27 @@ public final class Client {
             throws IOException, InterruptedException {
         Query query = new Query("/v1/sessions/" + segment(sessionId) + "/execs:lookup")
                 .add("operation_id", operationId);
-        return sendJson("GET", query.value(), null, ExecRecord.class);
+        requireText(operationId, "operationId");
+        return ExecutionReceipts.record(sendJson("GET", query.value(), null, ExecRecord.class), sessionId, null, operationId);
     }
 
     public ExecRecordList listExecs(String sessionId, String status, Integer limit, String cursor)
             throws IOException, InterruptedException {
+        if (limit != null && (limit < 1 || limit > 100)) throw new IllegalArgumentException("Execution page limit must be 1..100");
+        if (cursor != null && cursor.isBlank()) throw new IllegalArgumentException("Execution page cursor cannot be blank");
+        if (status != null) ExecutionReceipts.validateStatus(status);
         Query query = new Query("/v1/sessions/" + segment(sessionId) + "/execs")
                 .add("status", status)
                 .addPositive("limit", limit)
                 .add("cursor", cursor);
-        return sendJson("GET", query.value(), null, ExecRecordList.class);
+        return ExecutionReceipts.page(sendJson("GET", query.value(), null, ExecRecordList.class), sessionId, limit);
     }
 
     public ExecRecord cancelExec(String sessionId, String execId)
             throws IOException, InterruptedException {
-        return sendJson("POST", "/v1/sessions/" + segment(sessionId)
+        return ExecutionReceipts.record(sendJson("POST", "/v1/sessions/" + segment(sessionId)
                         + "/execs/" + segment(execId) + ":cancel",
-                Collections.emptyMap(), ExecRecord.class);
+                Collections.emptyMap(), ExecRecord.class), sessionId, execId, null);
     }
 
     public InputStream streamExecLogs(String sessionId, String execId, int cursor)
@@ -415,12 +575,36 @@ public final class Client {
         return sendJson("POST", path, null, WorkspaceFileInfo.class);
     }
 
+    public WorkspaceFileInfo setSessionFileExecutable(String sessionId, String workspacePath,
+            boolean executable, String ifMatch, Boolean expectedExecutable) throws IOException, InterruptedException {
+        Map<String, String> headers = new LinkedHashMap<>();
+        if (ifMatch != null) {
+            WorkspaceModels.digest(ifMatch);
+            headers.put("If-Match", ifMatch);
+        }
+        String path = "/v1/sessions/" + segment(sessionId) + "/files:executable?path=" + queryValue(workspacePath);
+        byte[] body = sendBytes("PATCH", path, JsonCodec.write(new WorkspaceModels.ExecutableRequest(executable, expectedExecutable)),
+                "application/json", headers, false, requestTimeout, 1);
+        WorkspaceFileInfo result = JsonCodec.readStrict(body, WorkspaceFileInfo.class);
+        if (result == null || result.executable == null || result.executable != executable)
+            throw new IOException("executable permission result not confirmed");
+        return result;
+    }
+
     public void removeSessionFile(String sessionId, String workspacePath, boolean recursive)
+            throws IOException, InterruptedException {
+        removeSessionFile(sessionId, workspacePath, recursive, null);
+    }
+
+    public void removeSessionFile(String sessionId, String workspacePath, boolean recursive, String ifMatch)
             throws IOException, InterruptedException {
         Query query = new Query("/v1/sessions/" + segment(sessionId) + "/files")
                 .add("path", workspacePath)
                 .add("recursive", Boolean.toString(recursive));
-        sendVoid("DELETE", query.value(), null);
+        Map<String, String> headers = new LinkedHashMap<>();
+        if (ifMatch != null) { WorkspaceModels.digest(ifMatch); headers.put("If-Match", ifMatch); }
+        // 删除后的未知结果只交给调用方核对，绝不重复删除可能已经被重建的目标。
+        sendBytes("DELETE", query.value(), null, null, headers, false, requestTimeout, 1);
     }
 
     public DependencyBuild buildDependencies(BuildDependencyRequest request)
@@ -501,7 +685,7 @@ public final class Client {
                            Duration timeout, int attempts)
             throws IOException, InterruptedException {
         byte[] payload = body == null ? null : JsonCodec.write(body);
-        boolean retryableRequest = isIdempotent(method) || hasIdempotencyKey(body);
+        boolean retryableRequest = isReadOnly(method);
         byte[] response = sendBytes(method, path, payload, "application/json", headers,
                 retryableRequest, timeout, attempts);
         return response.length == 0 ? null : JsonCodec.read(response, responseType);
@@ -511,7 +695,7 @@ public final class Client {
             throws IOException, InterruptedException {
         byte[] payload = body == null ? null : JsonCodec.write(body);
         byte[] response = sendBytes(method, path, payload, "application/json", null,
-                isIdempotent(method) || hasIdempotencyKey(body), requestTimeout, maxAttempts);
+                isReadOnly(method), requestTimeout, maxAttempts);
         return JsonCodec.read(response, responseType);
     }
 
@@ -519,14 +703,15 @@ public final class Client {
             throws IOException, InterruptedException {
         byte[] payload = body == null ? null : JsonCodec.write(body);
         sendBytes(method, path, payload, "application/json", null,
-                isIdempotent(method) || hasIdempotencyKey(body), requestTimeout, maxAttempts);
+                isReadOnly(method), requestTimeout, maxAttempts);
     }
 
     private byte[] sendBytes(String method, String path, byte[] data, String contentType,
                              Map<String, String> extraHeaders, boolean retryableRequest,
                              Duration timeout, int configuredAttempts)
             throws IOException, InterruptedException {
-        int attempts = retryableRequest ? Math.max(1, configuredAttempts) : 1;
+        // 幂等键只用于查询原操作，不构成未知副作用自动重发的许可。
+        int attempts = retryableRequest && isReadOnly(method) ? Math.max(1, configuredAttempts) : 1;
         long delayMs = retryBaseDelay.toMillis();
         IOException lastError = null;
         for (int attempt = 0; attempt < attempts; attempt++) {
@@ -543,7 +728,6 @@ public final class Client {
                         HttpResponse.BodyHandlers.ofByteArray());
                 int status = response.statusCode();
                 if (status >= 200 && status < 300) return response.body();
-                if ("DELETE".equals(method) && status == 404) return new byte[0];
                 ApiException error = new ApiException(status, response.body(), retryAfter(response));
                 if (error.retryable() && attempt + 1 < attempts) {
                     sleepRetry(error.retryAfter(), delayMs);
@@ -609,25 +793,13 @@ public final class Client {
         HttpRequest.Builder builder = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + path))
                 .header("Accept", "application/json")
-                .header("User-Agent", "genesis-sandbox-java/1");
+                .header("User-Agent", "genesis-sandbox-java/0.3.0");
         if (token != null && !token.isEmpty()) builder.header("Authorization", "Bearer " + token);
         return builder;
     }
 
-    private static boolean hasIdempotencyKey(Object body) {
-        if (body instanceof ExecRequest) return !blank(((ExecRequest) body).operationId);
-        if (body instanceof SubmitJobRequest) {
-            return !blank(((SubmitJobRequest) body).idempotencyKey);
-        }
-        if (body instanceof CreateSessionRequest) {
-            return !blank(((CreateSessionRequest) body).idempotencyKey);
-        }
-        return false;
-    }
-
-    private static boolean isIdempotent(String method) {
-        return "GET".equals(method) || "HEAD".equals(method) || "OPTIONS".equals(method)
-                || "PUT".equals(method) || "DELETE".equals(method);
+    private static boolean isReadOnly(String method) {
+        return "GET".equals(method) || "HEAD".equals(method) || "OPTIONS".equals(method);
     }
 
     private static Duration retryAfter(HttpResponse<?> response) {

@@ -258,21 +258,33 @@ public final class SandboxModels {
     }
 
     public static final class CreateWorkspaceRequest {
+        public WorkspaceModels.WorkspaceBinding workspaceBinding;
         public String workspaceId;
         public String retentionMode;
         public Integer ttlSeconds;
         public Integer quotaMb;
         public Map<String, String> metadata = new LinkedHashMap<>();
         public CreateWorkspaceRequest workspaceId(String value) { workspaceId = blankToNull(value); return this; }
+        public CreateWorkspaceRequest workspaceBinding(WorkspaceModels.WorkspaceBinding value) {
+            require(value, "workspaceBinding").validate(); workspaceBinding = value; return this;
+        }
         public CreateWorkspaceRequest retention(String mode, Integer ttl) {
             if (!"ttl".equals(mode) && !"explicit_delete".equals(mode)) {
                 throw new IllegalArgumentException("retentionMode must be ttl or explicit_delete");
             }
             retentionMode = mode; ttlSeconds = ttl; return this;
         }
+        void validate() {
+            if (workspaceBinding != null) workspaceBinding.validate();
+            if (retentionMode != null && !"ttl".equals(retentionMode) && !"explicit_delete".equals(retentionMode))
+                throw new IllegalArgumentException("invalid workspace retention mode");
+            if (ttlSeconds != null && ttlSeconds <= 0 || quotaMb != null && quotaMb <= 0)
+                throw new IllegalArgumentException("workspace budgets must be positive");
+        }
     }
 
     public static final class Workspace {
+        public long lifecycleRevision;
         public String workspaceId;
         public String tenantId;
         public String userId;
@@ -301,6 +313,8 @@ public final class SandboxModels {
     }
 
     public static final class Session {
+        public String defaultCwd;
+        public Map<String, String> metadata = new LinkedHashMap<>();
         public String sessionId;
         public String tenantId;
         public String userId;
@@ -318,12 +332,15 @@ public final class SandboxModels {
     }
 
     public static final class ExecRequest {
+        public ExecutionGovernance.Trusted trustedGovernance;
+        public ExecRequest trustedGovernance(ExecutionGovernance.Trusted value) { value.validate(); trustedGovernance=value; return this; }
         public String operationId = java.util.UUID.randomUUID().toString();
         public ExecRequest operationId(String value) { operationId = requireText(value, "operationId"); return this; }
         public List<String> command;
         public String code;
         public String language;
         public String workingDir;
+        public String outputDirectory;
         public Map<String, String> env = new LinkedHashMap<>();
         public Integer timeoutSeconds;
         public URI callbackUrl;
@@ -332,12 +349,16 @@ public final class SandboxModels {
         }
         public ExecRequest command(String... value) { command = commandList(value); code = null; return this; }
         public ExecRequest workingDir(String value) { workingDir = blankToNull(value); return this; }
+        public ExecRequest outputDirectory(String value) { outputDirectory = ExecutionOutputDirectory.validate(value); return this; }
         public ExecRequest env(String key, String value) { env.put(requireText(key, "env key"), value); return this; }
         public ExecRequest timeoutSeconds(int value) { timeoutSeconds = positive(value, "timeoutSeconds"); return this; }
-        void validate() { exactlyOne(code, command, "exec"); }
+        void validate() { exactlyOne(code, command, "exec"); ExecutionOutputDirectory.validate(outputDirectory); if (trustedGovernance != null) trustedGovernance.validate(); }
     }
 
     public static final class ExecRecord {
+		public Boolean stopConfirmed;
+		public String tenantId;
+		public String userId;
         public String operationId;
         public String execId;
         public String sessionId;
@@ -399,6 +420,7 @@ public final class SandboxModels {
     }
 
     public static final class WorkspaceFileInfo {
+        public Boolean executable;
         public String path;
         public String sandboxPath;
         public String environment;

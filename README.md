@@ -3,7 +3,7 @@
 Genesis Sandbox 的官方 Java 客户端 SDK。本仓库独立于服务端仓库 `genesis-sandbox` 演进，
 服务端只维护 HTTP 协议与实现；Go SDK 同样在独立仓库 `genesis-sandbox-client-go` 维护。
 
-发布坐标为 `io.genesis:genesis-sandbox-client-java:0.1.0`，Java 包名为
+发布坐标为 `io.genesis:genesis-sandbox-client-java:0.3.0`，Java 包名为
 `io.genesis.sandbox`，最低 Java 11。HTTP 使用 JDK `HttpClient`，JSON 使用
 Jackson 2.21 LTS；应用无需自行构造或解析 JSON。
 
@@ -13,6 +13,8 @@ Jackson 2.21 LTS；应用无需自行构造或解析 JSON。
 | --- | --- |
 | `src/main/java/io/genesis/sandbox/Client.java` | Java 11+ 类型化 Client，覆盖 jobs / workspaces / sessions / session WorkspaceFS |
 | `src/main/java/io/genesis/sandbox/SandboxModels.java` | 与 OpenAPI 对齐的请求、响应 DTO；公共类型不暴露 Jackson API |
+| `src/main/java/io/genesis/sandbox/WorkspaceModels.java` | 闭合 shared/isolated 绑定、批准来源事实及工作区控制回执 |
+| `src/main/java/io/genesis/sandbox/ExecutionGovernance.java` | 原调用授权与停止后维护查询 DTO；不补造来源、停止或释放事实 |
 | `src/main/java/io/genesis/sandbox/SandboxSession.java` | 同步 helper（休眠创建、懒启 Runtime、Suspend、心跳、WorkspaceFS） |
 | `src/main/java/io/genesis/sandbox/AsyncSandboxSession.java` | 异步 helper（CompletableFuture） |
 | `src/main/java/io/genesis/sandbox/SessionOptions.java` | 经过校验的 Session 参数构建器；profile / hints / resolutionId 互斥 |
@@ -27,6 +29,21 @@ Jackson 2.21 LTS；应用无需自行构造或解析 JSON。
 | `src/main/java/examples/ProductionAsync.java` | 异步并发示例；Suspend 完整注释见 ProductionSync |
 
 ## 编译与运行
+
+以 JDK 25 验证，SDK 发布字节码仍保持 Java 11。
+
+```powershell
+.\mvnw.cmd install
+.\mvnw.cmd -f verification/consumer/pom.xml compile exec:java
+```
+
+部分 Windows 长 TEMP 环境的 JDK 25 Unix pipe 会报 `Invalid argument: connect`，可显式只给测试 JVM 设置工程内短临时目录：
+
+```powershell
+.\mvnw.cmd install '-DargLine=-Djdk.net.unixdomain.tmpdir=D:/Work/workspace/go/sandbox/genesis-sandbox-client-java/target'
+```
+
+共享需服务预登记并授权的不透明 `storage_ref/resource_id/binding_version`，缺能力时不会切成 isolated；`inspectSharedStorageResource` 保留 `sharedAttachment=false` 的实际事实。`lookupSession` 的 404 返回 null，但不能据此自动重新创建未知会话。所有写请求只发送一次，已有幂等键或 operation_id 也不自动重发；只读 GET 可有界重试。
 
 ```powershell
 mvn package

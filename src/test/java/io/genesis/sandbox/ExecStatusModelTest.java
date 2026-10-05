@@ -8,6 +8,15 @@ import static io.genesis.sandbox.SandboxModels.SandboxExecResult;
 
 final class ExecStatusModelTest {
     @Test
+    void zeroExitCodeCannotHideCancellationTimeoutOrRuntimeError() {
+        for (String error : new String[]{"EXEC_CANCELLED", "EXEC_TIMEOUT", "OOM", "RUNTIME_UNAVAILABLE"}) {
+            if (new ExecResult(0, "", "", error, false, false, null).ok())
+                throw new AssertionError("error termination must not be successful");
+        }
+        if (!new ExecResult(0, "ok", "", null, false, false, null).ok())
+            throw new AssertionError("successful result");
+    }
+    @Test
     void commonTerminalStatesAreRecognizedAcrossExecutionModels() {
         JobResult job = new JobResult();
         job.status = "timed_out";

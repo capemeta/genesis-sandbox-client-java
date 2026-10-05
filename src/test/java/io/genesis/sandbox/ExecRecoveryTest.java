@@ -157,7 +157,7 @@ final class ExecRecoveryTest {
     }
 
     @Test
-    void syncLegacyRunAsyncGeneratesStableOperationIdAcrossRetries() throws Exception {
+    void syncLegacyRunAsyncPreservesOperationIdWithoutReplayingUnknown() throws Exception {
         AtomicInteger posts = new AtomicInteger();
         List<String> operationIds = Collections.synchronizedList(new ArrayList<>());
         HttpServer server = server();
@@ -172,8 +172,8 @@ final class ExecRecoveryTest {
                 client(server, 3), "python", 120, 0, 0, false)) {
             ExecRecoveryException error = assertThrows(ExecRecoveryException.class,
                     () -> session.runAsync("print(1)", "python", 30));
-            assertEquals(3, posts.get());
-            assertEquals(3, operationIds.size());
+            assertEquals(1, posts.get());
+            assertEquals(1, operationIds.size());
             assertFalse(operationIds.get(0).isBlank());
             assertTrue(operationIds.stream().allMatch(operationIds.get(0)::equals));
             assertEquals(operationIds.get(0), error.operationId());
@@ -183,7 +183,7 @@ final class ExecRecoveryTest {
     }
 
     @Test
-    void asyncLegacyRunAsyncGeneratesStableOperationIdAcrossRetries() throws Exception {
+    void asyncLegacyRunAsyncPreservesOperationIdWithoutReplayingUnknown() throws Exception {
         AtomicInteger posts = new AtomicInteger();
         List<String> operationIds = Collections.synchronizedList(new ArrayList<>());
         HttpServer server = server();
@@ -205,8 +205,8 @@ final class ExecRecoveryTest {
             } catch (java.util.concurrent.CompletionException error) {
                 assertInstanceOf(ExecRecoveryException.class, error.getCause());
                 ExecRecoveryException recovery = (ExecRecoveryException) error.getCause();
-                assertEquals(3, posts.get());
-                assertEquals(3, operationIds.size());
+                assertEquals(1, posts.get());
+                assertEquals(1, operationIds.size());
                 assertFalse(operationIds.get(0).isBlank());
                 assertTrue(operationIds.stream().allMatch(operationIds.get(0)::equals));
                 assertEquals(operationIds.get(0), recovery.operationId());

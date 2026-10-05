@@ -40,8 +40,12 @@ public final class ExecResult {
         );
     }
 
-    /** Returns {@code true} when {@code exitCode == 0}. */
-    public boolean ok() { return exitCode == 0; }
+    /**
+     * Returns {@code true} only for a genuinely successful execution.
+     * 与 Go/Python SDK 对齐：取消/超时等异常终止会置 errorCode（如 EXEC_CANCELLED），
+     * 即使 exitCode 为 0 也不是成功执行。
+     */
+    public boolean ok() { return exitCode == 0 && errorCode.isEmpty(); }
 
     @Override
     public String toString() {
